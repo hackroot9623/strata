@@ -1,4 +1,4 @@
-name: Build Linux bundle
+name: Build bundles
 
 on:
   push:
@@ -10,13 +10,30 @@ on:
 permissions:
   contents: write # needed to publish/update the release
 
+env:
+  FLUTTER_VERSION: 3.44.4
+
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            artifact: strata-linux-x64.tar.gz
+          - os: windows-latest
+            platform: windows
+            artifact: strata-windows-x64.zip
+          - os: macos-latest
+            platform: macos
+            artifact: strata-macos.zip
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -26,16 +43,17 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.44.4
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Analyze
         run: flutter analyze
 
       - name: Build release bundle
-        run: flutter build linux --release
+        run: flutter build ${{ matrix.platform }} --release
 
-      - name: Package tarball
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
         run: |
           mkdir -p dist/strata
           cp -r build/linux/x64/release/bundle/. dist/strata/
@@ -43,12 +61,32 @@ jobs:
              packaging/io.github.strata.Strata.png \
              packaging/install.sh packaging/uninstall.sh \
              dist/strata/
-          tar -C dist -czf strata-linux-x64.tar.gz strata
+          tar -C dist -czf ${{ matrix.artifact }} strata
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath ${{ matrix.artifact }}
+
+      - name: Package (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          cd build/macos/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent Strata.app "$GITHUB_WORKSPACE/${{ matrix.artifact }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: strata-linux-x64
-          path: strata-linux-x64.tar.gz
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       # main pushes -> rolling "latest" release (always the newest main build).
       - name: Publish rolling "latest" release
@@ -60,11 +98,11 @@ jobs:
           prerelease: true
           make_latest: false
           body: Automatically built from the latest commit on main (${{ github.sha }}).
-          files: strata-linux-x64.tar.gz
+          files: dist/*
 
       # v* tags -> a proper versioned release.
       - name: Publish versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: strata-linux-x64.tar.gz
+          files: dist/*
