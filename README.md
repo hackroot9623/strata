@@ -13,6 +13,8 @@
 <img width="1332" height="819" alt="Screenshot From 2026-07-02 10-25-54" src="https://github.com/user-attachments/assets/450d7fdd-4ddb-448e-b2fe-fe0a5e80a215" />
 <img width="1332" height="819" alt="Screenshot From 2026-07-02 10-27-48" src="https://github.com/user-attachments/assets/5550ff89-7fe1-4d6b-8766-45e39827cf6d" />
 <img width="1332" height="819" alt="Screenshot From 2026-07-02 10-28-29" src="https://github.com/user-attachments/assets/5edb8784-3211-4116-ab4f-d4784c1448b2" />
+<img width="1332" height="819" alt="Screenshot From 2026-07-02 10-31-12" src="https://github.com/user-attachments/assets/10539b04-89bb-4b89-a56c-2d61a43563af" />
+
 </p>
 
 - **Live conditions & 7-day / hourly forecast** — current temp, feels-like trend, hourly cards with a today/tomorrow scroller, expandable daily rows.
