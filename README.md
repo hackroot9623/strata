@@ -11,9 +11,7 @@
 
 ## Features
 
-<p align="center">
 https://github.com/user-attachments/assets/57cff696-ccc7-408b-9da0-14ee2c85d7ae
-</p>
 
 - **Live conditions & 7-day / hourly forecast** — current temp, feels-like trend, hourly cards with a today/tomorrow scroller, expandable daily rows.
 - **Weather-reactive UI** — the hero card's background and icon animate to match current conditions (clear, rain, snow, thunder, fog…), day or night.
