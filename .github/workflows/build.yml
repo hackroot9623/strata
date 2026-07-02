@@ -1,0 +1,54 @@
+name: Build Linux bundle
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build cmake clang pkg-config libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.4
+          cache: true
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Build release bundle
+        run: flutter build linux --release
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist/strata
+          cp -r build/linux/x64/release/bundle/. dist/strata/
+          cp packaging/io.github.strata.Strata.desktop \
+             packaging/io.github.strata.Strata.png \
+             packaging/install.sh packaging/uninstall.sh \
+             dist/strata/
+          tar -C dist -czf strata-linux-x64.tar.gz strata
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strata-linux-x64
+          path: strata-linux-x64.tar.gz
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: strata-linux-x64.tar.gz

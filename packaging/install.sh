@@ -3,8 +3,16 @@
 # Run ../packaging/install.sh from anywhere after `flutter build linux --release`.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUNDLE="$ROOT/build/linux/x64/release/bundle"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Two layouts: repo checkout (script in packaging/, bundle under build/) or
+# the CI tarball (script sits inside the bundle itself).
+if [ -x "$HERE/gnome_weather" ]; then
+  BUNDLE="$HERE"
+  META_DIR="$HERE"
+else
+  BUNDLE="$HERE/../build/linux/x64/release/bundle"
+  META_DIR="$HERE"
+fi
 APP_DIR="$HOME/.local/share/strata"
 BIN_DIR="$HOME/.local/bin"
 ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
@@ -20,8 +28,8 @@ mkdir -p "$APP_DIR" "$BIN_DIR" "$ICON_DIR" "$APPS_DIR"
 cp -r "$BUNDLE"/. "$APP_DIR"/
 
 ln -sf "$APP_DIR/gnome_weather" "$BIN_DIR/strata"
-cp "$ROOT/packaging/io.github.strata.Strata.png" "$ICON_DIR/"
-cp "$ROOT/packaging/io.github.strata.Strata.desktop" "$APPS_DIR/"
+cp "$META_DIR/io.github.strata.Strata.png" "$ICON_DIR/"
+cp "$META_DIR/io.github.strata.Strata.desktop" "$APPS_DIR/"
 
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
 gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
