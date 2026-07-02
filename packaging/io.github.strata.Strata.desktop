@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Strata
+Comment=Material 3 weather with a weather-reactive UI
+Exec=strata
+Icon=io.github.strata.Strata
+Categories=Utility;GTK;
+Keywords=weather;forecast;radar;temperature;
+Terminal=false

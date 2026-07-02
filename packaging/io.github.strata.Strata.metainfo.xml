@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.strata.Strata</id>
+  <name>Strata</name>
+  <summary>Material 3 weather with a weather-reactive UI</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.strata">
+    <name>Strata</name>
+  </developer>
+  <description>
+    <p>
+      A Material 3 desktop weather app: animated weather-reactive background,
+      hourly and 7-day forecast, radar and satellite maps, air quality, sun and
+      moon phases, and multiple providers (Open-Meteo, MET Norway).
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.strata.Strata.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-06-30"/>
+  </releases>
+</component>

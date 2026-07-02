@@ -1,0 +1,37 @@
+# Flatpak manifest — packages the PREBUILT Flutter release bundle.
+# Build the bundle first:  flutter build linux --release
+# Then:  flatpak-builder --user --install --force-clean build-flatpak \
+#          packaging/io.github.strata.Strata.yml
+#
+# Rename the app-id (io.github.<you>.Strata) to a domain/GitHub you own
+# before publishing to Flathub. Rename the 4 files in packaging/ to match.
+app-id: io.github.strata.Strata
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: strata
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=network          # weather / geocoding / radar APIs
+  - --device=dri             # GPU for the cloud shader
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: strata
+    buildsystem: simple
+    build-commands:
+      - cp -r bundle /app/strata
+      - mkdir -p /app/bin
+      - ln -s /app/strata/gnome_weather /app/bin/strata
+      - install -Dm644 io.github.strata.Strata.desktop /app/share/applications/io.github.strata.Strata.desktop
+      - install -Dm644 io.github.strata.Strata.png /app/share/icons/hicolor/256x256/apps/io.github.strata.Strata.png
+      - install -Dm644 io.github.strata.Strata.metainfo.xml /app/share/metainfo/io.github.strata.Strata.metainfo.xml
+    sources:
+      # The compiled bundle (relative to this manifest in packaging/).
+      - type: dir
+        path: ../build/linux/x64/release
+      # The desktop/icon/metadata files that live beside this manifest.
+      - type: dir
+        path: .
