@@ -30,6 +30,7 @@ flutter:
   assets:
     - assets/icons/
     - assets/tray/
+    - assets/moon/
   fonts:
     - family: Inter
       fonts:

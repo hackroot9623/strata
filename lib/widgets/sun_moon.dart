@@ -266,11 +266,7 @@ class MoonCard extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             children: [
-              SizedBox(
-                width: 104,
-                height: 104,
-                child: CustomPaint(painter: _MoonPainter(p)),
-              ),
+              _MoonGlyph(phase: p, size: 104),
               const SizedBox(width: 18),
               Expanded(
                 child: Column(
@@ -305,91 +301,175 @@ class MoonCard extends StatelessWidget {
       );
 
   void _showDialog(BuildContext context) {
-    final now = DateTime.now();
-    final p = moonPhase(now);
-    final illum = ((1 - math.cos(2 * math.pi * p)) / 2 * 100).round();
+    showDialog(context: context, builder: (_) => const _MoonDialog());
+  }
+}
 
-    // Next occurrence of each principal phase (phase advances ~linearly).
+/// Moon phases dialog: a realistic moon graphic plus a day slider (today .. +29
+/// days) that scrubs through the synodic cycle, animating the phase/terminator
+/// and illumination% as it moves.
+class _MoonDialog extends StatefulWidget {
+  const _MoonDialog();
+  @override
+  State<_MoonDialog> createState() => _MoonDialogState();
+}
+
+class _MoonDialogState extends State<_MoonDialog>
+    with SingleTickerProviderStateMixin {
+  static const _synodic = 29.53058867;
+  late final DateTime _today = DateTime.now();
+  late final List<(String, double, DateTime)> _events = _upcomingEvents();
+
+  late final AnimationController _ctrl = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 260));
+  late Animation<double> _phaseAnim = AlwaysStoppedAnimation(moonPhase(_today));
+  double _displayedPhase = 0;
+  double _days = 0; // slider position: days from today
+
+  @override
+  void initState() {
+    super.initState();
+    _displayedPhase = moonPhase(_today);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  List<(String, double, DateTime)> _upcomingEvents() {
+    final p = moonPhase(_today);
     DateTime nextAt(double target) {
       var d = (target - p) % 1.0;
       if (d <= 0) d += 1;
-      return now.add(Duration(seconds: (d * 29.53058867 * 86400).round()));
+      return _today.add(Duration(seconds: (d * _synodic * 86400).round()));
     }
 
-    final events = <(String, double, DateTime)>[
+    return <(String, double, DateTime)>[
       ('New Moon', 0.0, nextAt(0.0)),
       ('First Quarter', 0.25, nextAt(0.25)),
       ('Full Moon', 0.5, nextAt(0.5)),
       ('Last Quarter', 0.75, nextAt(0.75)),
     ]..sort((a, b) => a.$3.compareTo(b.$3));
+  }
 
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Row(children: [
-          Icon(Icons.nightlight_round),
-          SizedBox(width: 8),
-          Text('Moon phases'),
-        ]),
-        content: SizedBox(
-          width: 340,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  SizedBox(
-                      width: 56,
-                      height: 56,
-                      child: CustomPaint(painter: _MoonPainter(p))),
-                  const SizedBox(width: 14),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(moonName(p),
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 16)),
-                      Text('$illum% illuminated · now'),
-                    ],
-                  ),
-                ],
-              ),
-              const Divider(height: 24),
-              for (final (name, phase, date) in events)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                          width: 34,
-                          height: 34,
-                          child: CustomPaint(painter: _MoonPainter(phase))),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(name)),
-                      Text('${weekday(date)} ${date.day}/${date.month}',
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                    ],
-                  ),
+  void _seek(double days) {
+    final target =
+        moonPhase(_today.add(Duration(minutes: (days * 1440).round())));
+    // Interpolate the short way around the 0..1 cycle instead of always
+    // forward, so the terminator doesn't visibly "rewind" the long way.
+    var begin = _displayedPhase;
+    final delta = target - begin;
+    if (delta > 0.5) {
+      begin += 1;
+    } else if (delta < -0.5) {
+      begin -= 1;
+    }
+    _phaseAnim = Tween(begin: begin, end: target)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic))
+      ..addListener(() {
+        setState(() => _displayedPhase = _phaseAnim.value % 1.0);
+      });
+    _ctrl
+      ..reset()
+      ..forward();
+    setState(() => _days = days);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final date = _today.add(Duration(minutes: (_days * 1440).round()));
+    final illum =
+        ((1 - math.cos(2 * math.pi * _displayedPhase)) / 2 * 100).round();
+    final dayLabel =
+        _days == 0 ? 'Today' : '${weekday(date)} ${date.day}/${date.month}';
+
+    return AlertDialog(
+      title: const Row(children: [
+        Icon(Icons.nightlight_round),
+        SizedBox(width: 8),
+        Text('Moon phases'),
+      ]),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _MoonGlyph(phase: _displayedPhase, size: 148),
+            const SizedBox(height: 10),
+            Text(moonName(_displayedPhase),
+                style:
+                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 17)),
+            const SizedBox(height: 2),
+            Text('$illum% illuminated · $dayLabel',
+                style: TextStyle(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.6))),
+            Slider(
+              value: _days,
+              min: 0,
+              max: 29,
+              divisions: 29,
+              label: dayLabel,
+              onChanged: _seek,
+            ),
+            const Divider(height: 16),
+            for (final (name, phase, evDate) in _events)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    _MoonGlyph(phase: phase, size: 34),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(name)),
+                    Text('${weekday(evDate)} ${evDate.day}/${evDate.month}',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ],
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close')),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close')),
+      ],
+    );
+  }
+}
+
+/// Real moon photo + a phase-shadow overlay, instead of a procedural texture.
+class _MoonGlyph extends StatelessWidget {
+  final double phase; // 0..1
+  final double size;
+  const _MoonGlyph({required this.phase, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        children: [
+          ClipOval(
+            child: Image.asset('assets/moon/full-moon.png',
+                width: size, height: size, fit: BoxFit.cover),
+          ),
+          CustomPaint(
+              size: Size(size, size), painter: _MoonShadowPainter(phase)),
         ],
       ),
     );
   }
 }
 
-class _MoonPainter extends CustomPainter {
+class _MoonShadowPainter extends CustomPainter {
   final double phase; // 0..1
-  _MoonPainter(this.phase);
-
-  static const _lit = Color(0xFFECEFF1);
-  static const _dark = Color(0xFF2B3640);
+  _MoonShadowPainter(this.phase);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -397,41 +477,28 @@ class _MoonPainter extends CustomPainter {
     final c = Offset(r, r);
     final rect = Rect.fromCircle(center: c, radius: r);
 
-    // Unlit base disk.
-    canvas.drawCircle(c, r, Paint()..color = _dark);
-
-    final illum = (1 - math.cos(2 * math.pi * phase)) / 2; // 0..1
+    // Same terminator math as before, just masking the real photo instead of
+    // a painted texture.
     final waxing = phase < 0.5;
-
-    // Lit half (right when waxing, left when waning).
     final half = Path()
       ..addArc(rect, waxing ? -math.pi / 2 : math.pi / 2, math.pi);
-
-    // Terminator ellipse; its width tracks the illuminated fraction.
     final ellW = (r * math.cos(2 * math.pi * phase)).abs();
     final ell = Path()
       ..addOval(Rect.fromCenter(center: c, width: ellW * 2, height: r * 2));
-
+    final illum = (1 - math.cos(2 * math.pi * phase)) / 2; // 0..1
     final litPath = illum <= 0.5
         ? Path.combine(PathOperation.difference, half, ell)
         : Path.combine(PathOperation.union, half, ell);
+    final unlitPath =
+        Path.combine(PathOperation.difference, Path()..addOval(rect), litPath);
 
     canvas.drawPath(
-        litPath,
+        unlitPath,
         Paint()
-          ..color = _lit
+          ..color = const Color(0xFF0B0E14).withValues(alpha: 0.94)
           ..isAntiAlias = true);
-
-    // Subtle rim.
-    canvas.drawCircle(
-        c,
-        r - 0.5,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.white.withValues(alpha: 0.10));
   }
 
   @override
-  bool shouldRepaint(_MoonPainter old) => old.phase != phase;
+  bool shouldRepaint(_MoonShadowPainter old) => old.phase != phase;
 }
