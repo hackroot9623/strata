@@ -246,8 +246,10 @@ class SettingsScreen extends StatelessWidget {
                 children: [
                   const _Header('Map layers'),
                   const Text(
-                      'Precipitation radar is free (RainViewer). Temperature and '
-                      'Wind layers use OpenWeatherMap — paste a free API key:'),
+                      'Precipitation radar is free (RainViewer), as is the '
+                      'higher-resolution US Radar layer (NOAA/NWS, US only). '
+                      'Temperature and Wind layers use OpenWeatherMap — paste '
+                      'a free API key:'),
                   const SizedBox(height: 12),
                   TextFormField(
                     initialValue: settings.owmKey,

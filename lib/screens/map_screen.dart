@@ -10,7 +10,50 @@ import '../widgets/sky_card.dart';
 
 enum BaseMap { map, satellite }
 
-enum WxLayer { radar, clouds, temperature, wind }
+enum WxLayer { radar, clouds, temperature, wind, usRadar }
+
+/// NOAA/NWS nowCOAST MRMS base reflectivity — a dynamic ArcGIS ImageServer,
+/// not a cached XYZ tile pyramid, so each tile is fetched via an
+/// `exportImage` call for that tile's Web Mercator bbox. Free, no key,
+/// ~2 min updates, but only covers the US + territories. The same
+/// time-enabled endpoint serves both the "current" layer (omit the `t` option)
+/// and animated frames (pass a specific instant).
+///
+/// Must be a single long-lived instance (each one owns an `http.Client`, and
+/// `flutter_map` only disposes a `TileProvider` when its `TileLayer` is torn
+/// down for good — a *replaced* provider is never disposed). Read the
+/// selected time from `options.additionalOptions` instead of a constructor
+/// field, so a stable `TileLayer(tileProvider: sameInstance, additionalOptions:
+/// {'t': ...})` can drive the animation via flutter_map's own tile-reload
+/// hook (it reloads on `additionalOptions` changes) without ever recreating
+/// the provider or its client.
+class MrmsTileProvider extends NetworkTileProvider {
+  // This free ArcGIS export endpoint isn't built for tile-pyramid traffic and
+  // rate-limits bursts of concurrent requests (a whole viewport's worth of
+  // tiles refetch on every animation frame) — a transient 403 shouldn't crash
+  // the map or spam the console, just render that tile blank until the next
+  // frame/pan.
+  MrmsTileProvider() : super(silenceExceptions: true);
+
+  static const _origin = 20037508.342789244;
+
+  @override
+  String getTileUrl(TileCoordinates coordinates, TileLayer options) {
+    final n = 1 << coordinates.z;
+    final res = (2 * _origin) / (256 * n);
+    final xmin = -_origin + coordinates.x * 256 * res;
+    final ymax = _origin - coordinates.y * 256 * res;
+    final xmax = xmin + 256 * res;
+    final ymin = ymax - 256 * res;
+    final timeMillis = options.additionalOptions['t'];
+    final time =
+        (timeMillis == null || timeMillis.isEmpty) ? '' : '&time=$timeMillis';
+    return 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/'
+        'radar/radar_base_reflectivity_time/ImageServer/exportImage'
+        '?bbox=$xmin,$ymin,$xmax,$ymax&bboxSR=3857&imageSR=3857'
+        '&size=256,256&format=png32&transparent=true&f=image$time';
+  }
+}
 
 class _Frame {
   final int time; // unix seconds
@@ -27,23 +70,36 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final _map = MapController();
+  // One long-lived provider (and its one http.Client) for the screen's whole
+  // life — see MrmsTileProvider's doc comment for why this must not be
+  // recreated per frame/build.
+  final _mrmsTileProvider = MrmsTileProvider();
   List<_Frame> _radar = [];
   List<_Frame> _sat = [];
+  List<_Frame> _mrms =
+      []; // NOAA MRMS animation frames (url unused; see build())
   BaseMap _base = BaseMap.map;
   WxLayer _layer = WxLayer.radar;
 
   int _frame = 0;
   bool _playing = true;
   Timer? _timer;
+  int _tick = 0;
 
   @override
   void initState() {
     super.initState();
     _loadRainViewer();
+    _loadMrmsFrames();
     _timer = Timer.periodic(const Duration(milliseconds: 600), (_) {
       if (!_playing) return;
       final frames = _frames();
       if (frames == null || frames.isEmpty) return;
+      // NOAA's export endpoint rate-limits bursts of concurrent tile
+      // requests, so this layer advances a whole viewport's worth of tiles
+      // every 3rd tick (~1.8s) instead of every tick (~0.6s) like the
+      // lightweight CDN-backed RainViewer/satellite layers.
+      if (_layer == WxLayer.usRadar && (_tick++) % 3 != 0) return;
       setState(() => _frame = (_frame + 1) % frames.length);
     });
   }
@@ -80,9 +136,39 @@ class _MapScreenState extends State<MapScreen> {
     } catch (_) {/* layers just won't show */}
   }
 
+  // NOAA MRMS: the ImageServer exposes a timeExtent, not a frame list — build
+  // one ourselves at a fixed step. `.url` is left blank; MrmsTileProvider is
+  // constructed directly with the selected frame's time in build() instead.
+  Future<void> _loadMrmsFrames() async {
+    try {
+      final res = await http.get(Uri.parse(
+          'https://mapservices.weather.noaa.gov/eventdriven/rest/services/'
+          'radar/radar_base_reflectivity_time/ImageServer?f=json'));
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      final extent = (j['timeInfo'] as Map?)?['timeExtent'] as List?;
+      if (extent == null || extent.length < 2) return;
+      final start = (extent[0] as num).toInt();
+      final end = (extent[1] as num).toInt();
+      const stepMs = 5 * 60 * 1000; // 5 min per frame
+      const maxFrames = 24;
+      final frames = <_Frame>[];
+      for (var t = start; t <= end && frames.length < maxFrames; t += stepMs) {
+        frames.add(_Frame(t ~/ 1000, ''));
+      }
+      if (frames.isEmpty || frames.last.time * 1000 < end) {
+        frames.add(_Frame(end ~/ 1000, '')); // always end on the latest scan
+      }
+      setState(() {
+        _mrms = frames;
+        if (_layer == WxLayer.usRadar) _frame = _latestIndex(_mrms);
+      });
+    } catch (_) {/* layer just won't animate */}
+  }
+
   List<_Frame>? _frames() => switch (_layer) {
         WxLayer.radar => _radar,
         WxLayer.clouds => _sat,
+        WxLayer.usRadar => _mrms,
         _ => null, // OWM layers are static, no playback
       };
 
@@ -97,6 +183,7 @@ class _MapScreenState extends State<MapScreen> {
       : 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png';
 
   String? _overlayUrl() {
+    if (_layer == WxLayer.usRadar) return null; // rendered via MrmsTileProvider
     final frames = _frames();
     if (frames != null) {
       if (frames.isEmpty) return null;
@@ -123,6 +210,7 @@ class _MapScreenState extends State<MapScreen> {
       _frame = _latestIndex(switch (l) {
         WxLayer.radar => _radar,
         WxLayer.clouds => _sat,
+        WxLayer.usRadar => _mrms,
         _ => null,
       });
     });
@@ -157,7 +245,26 @@ class _MapScreenState extends State<MapScreen> {
                   _base == BaseMap.map ? const ['a', 'b', 'c'] : const [],
               userAgentPackageName: 'com.example.gnome_weather',
             ),
-            if (overlay != null)
+            if (_layer == WxLayer.usRadar)
+              Opacity(
+                opacity: 0.75,
+                child: TileLayer(
+                  // Stable key + stable tileProvider instance (see its doc
+                  // comment) — changing `additionalOptions` is what tells
+                  // flutter_map to reload tiles for the new frame.
+                  key: const ValueKey('usRadar'),
+                  tileProvider: _mrmsTileProvider,
+                  additionalOptions: {
+                    't': (frames != null && frames.isNotEmpty)
+                        ? (frames[_frame.clamp(0, frames.length - 1)].time *
+                                1000)
+                            .toString()
+                        : '',
+                  },
+                  userAgentPackageName: 'com.example.gnome_weather',
+                ),
+              )
+            else if (overlay != null)
               Opacity(
                 opacity: _layer == WxLayer.clouds ? 0.85 : 0.7,
                 child: TileLayer(
@@ -175,11 +282,20 @@ class _MapScreenState extends State<MapScreen> {
                     const Icon(Icons.location_on, color: Colors.red, size: 40),
               ),
             ]),
-            RichAttributionWidget(attributions: [
-              TextSourceAttribution(_base == BaseMap.satellite
-                  ? 'Esri World Imagery · RainViewer'
-                  : 'OpenTopoMap · RainViewer'),
-            ]),
+            RichAttributionWidget(
+              // Our own TextSourceAttribution already credits every layer;
+              // flutter_map's own logo attribution just adds a bundled asset
+              // that doesn't resolve in this build.
+              showFlutterMapAttribution: false,
+              attributions: [
+                TextSourceAttribution([
+                  _base == BaseMap.satellite
+                      ? 'Esri World Imagery'
+                      : 'OpenTopoMap',
+                  _layer == WxLayer.usRadar ? 'NOAA/NWS' : 'RainViewer',
+                ].join(' · ')),
+              ],
+            ),
           ],
         ),
 
@@ -206,6 +322,9 @@ class _MapScreenState extends State<MapScreen> {
             children: [
               _LayerBtn('Radar', Icons.radar, _layer == WxLayer.radar,
                   () => _select(WxLayer.radar)),
+              const SizedBox(height: 10),
+              _LayerBtn('US Radar (NOAA)', Icons.blur_on,
+                  _layer == WxLayer.usRadar, () => _select(WxLayer.usRadar)),
               const SizedBox(height: 10),
               _LayerBtn('Satellite (clouds)', Icons.satellite_alt,
                   _layer == WxLayer.clouds, () => _select(WxLayer.clouds)),
@@ -393,6 +512,15 @@ class _Legend extends StatelessWidget {
           ],
           ['calm', 'strong']
         ),
+      WxLayer.usRadar => (
+          'US Radar (NOAA, dBZ)',
+          [
+            const Color(0xFF4CAF50),
+            const Color(0xFFFFEB3B),
+            const Color(0xFFD32F2F)
+          ],
+          ['light', 'severe']
+        ),
     };
     return SkyCard(
       padding: const EdgeInsets.all(14),
@@ -412,17 +540,24 @@ class _Legend extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: labels
-                .map((l) => Text(l,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.6))))
-                .toList(),
+          SizedBox(
+            // Match the gradient bar's width exactly so spaceBetween has a
+            // fixed span to work with — without this, the row shrinks to fit
+            // its text (however wide the ambient title/card happens to be)
+            // and the two labels end up jammed together.
+            width: 140,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: labels
+                  .map((l) => Text(l,
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withValues(alpha: 0.6))))
+                  .toList(),
+            ),
           ),
         ],
       ),
