@@ -55,6 +55,35 @@ class MrmsTileProvider extends NetworkTileProvider {
   }
 }
 
+/// NOAA/NESDIS Global Mosaic of Geostationary Satellite Imagery (GMGSI),
+/// longwave/thermal-infrared channel, via nowCOAST's GeoServer WMS. Global
+/// coverage (unlike the US-only MRMS radar), free, no key. Hourly updates
+/// with ~2-3h latency — coarser cadence than RainViewer, but RainViewer's
+/// satellite feed is currently returning zero frames (dead), so this is a
+/// real image instead of nothing. Same "single stable instance,
+/// additionalOptions-driven reload" rules as [MrmsTileProvider] apply.
+class NoaaSatelliteTileProvider extends NetworkTileProvider {
+  NoaaSatelliteTileProvider() : super(silenceExceptions: true);
+
+  static const _origin = 20037508.342789244;
+
+  @override
+  String getTileUrl(TileCoordinates coordinates, TileLayer options) {
+    final n = 1 << coordinates.z;
+    final res = (2 * _origin) / (256 * n);
+    final xmin = -_origin + coordinates.x * 256 * res;
+    final ymax = _origin - coordinates.y * 256 * res;
+    final xmax = xmin + 256 * res;
+    final ymin = ymax - 256 * res;
+    final iso = options.additionalOptions['t'];
+    final time = (iso == null || iso.isEmpty) ? '' : '&time=$iso';
+    return 'https://nowcoast.noaa.gov/geoserver/ows?service=WMS&version=1.3.0'
+        '&request=GetMap&layers=satellite:global_longwave_imagery_mosaic'
+        '&styles=&crs=EPSG:3857&bbox=$xmin,$ymin,$xmax,$ymax'
+        '&width=256&height=256&format=image/png&transparent=true$time';
+  }
+}
+
 class _Frame {
   final int time; // unix seconds
   final String url; // ready tile template
@@ -70,12 +99,13 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final _map = MapController();
-  // One long-lived provider (and its one http.Client) for the screen's whole
-  // life — see MrmsTileProvider's doc comment for why this must not be
-  // recreated per frame/build.
+  // One long-lived provider (and its one http.Client) per remote-rendered
+  // layer, for the screen's whole life — see MrmsTileProvider's doc comment
+  // for why these must not be recreated per frame/build.
   final _mrmsTileProvider = MrmsTileProvider();
+  final _satTileProvider = NoaaSatelliteTileProvider();
   List<_Frame> _radar = [];
-  List<_Frame> _sat = [];
+  List<_Frame> _sat = []; // NOAA satellite animation frames (url unused)
   List<_Frame> _mrms =
       []; // NOAA MRMS animation frames (url unused; see build())
   BaseMap _base = BaseMap.map;
@@ -91,15 +121,17 @@ class _MapScreenState extends State<MapScreen> {
     super.initState();
     _loadRainViewer();
     _loadMrmsFrames();
+    _loadSatFrames();
     _timer = Timer.periodic(const Duration(milliseconds: 600), (_) {
       if (!_playing) return;
       final frames = _frames();
       if (frames == null || frames.isEmpty) return;
-      // NOAA's export endpoint rate-limits bursts of concurrent tile
-      // requests, so this layer advances a whole viewport's worth of tiles
+      // NOAA's export/WMS endpoints rate-limit bursts of concurrent tile
+      // requests, so these layers advance a whole viewport's worth of tiles
       // every 3rd tick (~1.8s) instead of every tick (~0.6s) like the
-      // lightweight CDN-backed RainViewer/satellite layers.
-      if (_layer == WxLayer.usRadar && (_tick++) % 3 != 0) return;
+      // lightweight RainViewer radar CDN.
+      final throttled = _layer == WxLayer.usRadar || _layer == WxLayer.clouds;
+      if (throttled && (_tick++) % 3 != 0) return;
       setState(() => _frame = (_frame + 1) % frames.length);
     });
   }
@@ -110,7 +142,9 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
-  // RainViewer: radar (past + nowcast) and infrared satellite frames in one JSON.
+  // RainViewer radar (past + nowcast). RainViewer's own satellite/infrared
+  // feed currently returns zero frames — see NoaaSatelliteTileProvider,
+  // which replaces it.
   Future<void> _loadRainViewer() async {
     try {
       final res = await http.get(
@@ -127,13 +161,42 @@ class _MapScreenState extends State<MapScreen> {
         ...build(j['radar']?['past'] as List?, '4/1_1'),
         ...build(j['radar']?['nowcast'] as List?, '4/1_1'),
       ];
-      final sat = build(j['satellite']?['infrared'] as List?, '0/0_0');
       setState(() {
         _radar = radar;
-        _sat = sat;
         _frame = _latestIndex(_frames());
       });
-    } catch (_) {/* layers just won't show */}
+    } catch (_) {/* layer just won't show */}
+  }
+
+  // NOAA satellite: the WMS Dimension lists the actual available instants
+  // directly (no synthetic stepping needed, unlike MRMS's plain timeExtent).
+  Future<void> _loadSatFrames() async {
+    try {
+      final res = await http.get(Uri.parse(
+          'https://nowcoast.noaa.gov/geoserver/satellite/ows?service=wms&'
+          'version=1.3.0&request=GetCapabilities'));
+      final body = res.body;
+      // Workspace-scoped capabilities list bare layer names (no
+      // "satellite:" prefix); the GetMap request still needs the qualified
+      // name since it hits the unscoped /geoserver/ows endpoint.
+      final layerIdx = body.indexOf('global_longwave_imagery_mosaic');
+      if (layerIdx == -1) return;
+      final dimStart = body.indexOf('<Dimension name="time"', layerIdx);
+      final valuesStart = body.indexOf('>', dimStart) + 1;
+      final valuesEnd = body.indexOf('</Dimension>', valuesStart);
+      if (dimStart == -1 || valuesStart == 0 || valuesEnd == -1) return;
+      final times = body
+          .substring(valuesStart, valuesEnd)
+          .split(',')
+          .map((s) => DateTime.parse(s.trim()).millisecondsSinceEpoch ~/ 1000)
+          .toList()
+        ..sort();
+      final frames = times.map((t) => _Frame(t, '')).toList();
+      setState(() {
+        _sat = frames;
+        if (_layer == WxLayer.clouds) _frame = _latestIndex(_sat);
+      });
+    } catch (_) {/* layer just won't animate */}
   }
 
   // NOAA MRMS: the ImageServer exposes a timeExtent, not a frame list — build
@@ -183,7 +246,8 @@ class _MapScreenState extends State<MapScreen> {
       : 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png';
 
   String? _overlayUrl() {
-    if (_layer == WxLayer.usRadar) return null; // rendered via MrmsTileProvider
+    // Rendered via a custom TileProvider (see build()), not a URL template.
+    if (_layer == WxLayer.usRadar || _layer == WxLayer.clouds) return null;
     final frames = _frames();
     if (frames != null) {
       if (frames.isEmpty) return null;
@@ -264,11 +328,37 @@ class _MapScreenState extends State<MapScreen> {
                   userAgentPackageName: 'com.example.gnome_weather',
                 ),
               )
+            else if (_layer == WxLayer.clouds)
+              Opacity(
+                opacity: 0.85,
+                child: TileLayer(
+                  key: const ValueKey('satellite'),
+                  tileProvider: _satTileProvider,
+                  additionalOptions: {
+                    't': (frames != null && frames.isNotEmpty)
+                        ? DateTime.fromMillisecondsSinceEpoch(
+                                frames[_frame.clamp(0, frames.length - 1)]
+                                        .time *
+                                    1000,
+                                isUtc: true)
+                            .toIso8601String()
+                        : '',
+                  },
+                  userAgentPackageName: 'com.example.gnome_weather',
+                ),
+              )
             else if (overlay != null)
               Opacity(
-                opacity: _layer == WxLayer.clouds ? 0.85 : 0.7,
+                opacity: 0.7,
                 child: TileLayer(
-                  key: ValueKey(overlay),
+                  // Stable per *layer type*, not per frame — flutter_map
+                  // already reloads tiles when urlTemplate changes (that's
+                  // how the per-frame animation works); keying on the
+                  // per-frame `overlay` string instead tore down and
+                  // recreated the whole TileLayer (and its default
+                  // NetworkTileProvider + http.Client) every ~600ms, which
+                  // is what was exhausting sockets/triggering 429s.
+                  key: ValueKey('overlay-${_layer.name}'),
                   urlTemplate: overlay,
                   userAgentPackageName: 'com.example.gnome_weather',
                 ),
@@ -292,7 +382,11 @@ class _MapScreenState extends State<MapScreen> {
                   _base == BaseMap.satellite
                       ? 'Esri World Imagery'
                       : 'OpenTopoMap',
-                  _layer == WxLayer.usRadar ? 'NOAA/NWS' : 'RainViewer',
+                  switch (_layer) {
+                    WxLayer.usRadar => 'NOAA/NWS',
+                    WxLayer.clouds => 'NOAA/NESDIS',
+                    _ => 'RainViewer',
+                  },
                 ].join(' · ')),
               ],
             ),
