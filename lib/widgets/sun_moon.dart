@@ -330,6 +330,12 @@ class _MoonDialogState extends State<_MoonDialog>
   void initState() {
     super.initState();
     _displayedPhase = moonPhase(_today);
+    // Attached once — _seek() only ever reassigns `_phaseAnim` (read here on
+    // every tick), instead of each drag adding its own listener on top of
+    // every previous one that was never removed.
+    _ctrl.addListener(() {
+      setState(() => _displayedPhase = _phaseAnim.value % 1.0);
+    });
   }
 
   @override
@@ -367,10 +373,7 @@ class _MoonDialogState extends State<_MoonDialog>
       begin -= 1;
     }
     _phaseAnim = Tween(begin: begin, end: target)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic))
-      ..addListener(() {
-        setState(() => _displayedPhase = _phaseAnim.value % 1.0);
-      });
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     _ctrl
       ..reset()
       ..forward();

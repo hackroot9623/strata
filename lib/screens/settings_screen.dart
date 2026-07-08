@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart' show applyTitleBar;
 import '../settings.dart';
@@ -78,15 +79,11 @@ class SettingsScreen extends StatelessWidget {
                   ],
                   if (settings.providerIndex == 2) ...[
                     const Divider(height: 24),
-                    TextFormField(
+                    _ApiKeyField(
                       initialValue: settings.pirateWeatherKey,
-                      decoration: const InputDecoration(
-                        labelText: 'Pirate Weather API key',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: (v) {
-                        settings.update(pirateWeatherKey: v.trim());
+                      labelText: 'Pirate Weather API key',
+                      onSaved: (v) {
+                        settings.update(pirateWeatherKey: v);
                         onChanged();
                       },
                     ),
@@ -251,14 +248,10 @@ class SettingsScreen extends StatelessWidget {
                       'Temperature and Wind layers use OpenWeatherMap — paste '
                       'a free API key:'),
                   const SizedBox(height: 12),
-                  TextFormField(
+                  _ApiKeyField(
                     initialValue: settings.owmKey,
-                    decoration: const InputDecoration(
-                      labelText: 'OpenWeatherMap API key',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onChanged: (v) => settings.update(owm: v.trim()),
+                    labelText: 'OpenWeatherMap API key',
+                    onSaved: (v) => settings.update(owm: v),
                   ),
                 ],
               ),
@@ -305,6 +298,53 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A key/token field that debounces persistence — typing a 20-char key
+/// shouldn't trigger 20 full settings writes + app-wide rebuilds (settings.
+/// update() rewrites every persisted pref and notifies the whole app's
+/// AnimatedBuilder). Saves ~500ms after the user stops typing instead.
+class _ApiKeyField extends StatefulWidget {
+  final String initialValue;
+  final String labelText;
+  final ValueChanged<String> onSaved;
+  const _ApiKeyField({
+    required this.initialValue,
+    required this.labelText,
+    required this.onSaved,
+  });
+
+  @override
+  State<_ApiKeyField> createState() => _ApiKeyFieldState();
+}
+
+class _ApiKeyFieldState extends State<_ApiKeyField> {
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(
+        const Duration(milliseconds: 500), () => widget.onSaved(v.trim()));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      initialValue: widget.initialValue,
+      decoration: InputDecoration(
+        labelText: widget.labelText,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      onChanged: _onChanged,
     );
   }
 }

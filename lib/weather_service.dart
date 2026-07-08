@@ -45,6 +45,9 @@ Future<Geo> geocode(String place) async {
   final uri = Uri.https('geocoding-api.open-meteo.com', '/v1/search',
       {'name': place, 'count': '1', 'language': 'en', 'format': 'json'});
   final res = await http.get(uri);
+  if (res.statusCode != 200) {
+    throw Exception('Location search error ${res.statusCode}');
+  }
   final j = jsonDecode(res.body) as Map<String, dynamic>;
   final results = j['results'] as List?;
   if (results == null || results.isEmpty) {

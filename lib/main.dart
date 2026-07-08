@@ -1037,6 +1037,10 @@ class _SearchFieldState extends State<_SearchField> {
       optionsBuilder: (v) async {
         final q = v.text.trim();
         if (q.length < 2) return const Iterable<Geo>.empty();
+        // Debounce: wait a beat, then bail if the user kept typing — only
+        // the last keystroke in a burst actually fires the geocode request.
+        await Future.delayed(const Duration(milliseconds: 250));
+        if (_controller.text.trim() != q) return const Iterable<Geo>.empty();
         return geocodeSuggest(q);
       },
       onSelected: onPick,

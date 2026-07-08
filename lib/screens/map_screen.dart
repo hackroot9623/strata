@@ -12,6 +12,35 @@ enum BaseMap { map, satellite }
 
 enum WxLayer { radar, clouds, temperature, wind, usRadar }
 
+/// Tracks in-flight tile requests so the map screen's auto-advance timer can
+/// wait for the current frame to actually finish loading before switching to
+/// the next one — otherwise a slow frame (NOAA's endpoints aren't CDN-fast)
+/// shows a visible patchwork of old/new tiles as each one finishes loading
+/// at a different time. Piggybacks a second listener onto the same resolved
+/// `ImageStream` flutter_map already uses — `ImageProvider.resolve()` shares
+/// the underlying cache/completer, so this doesn't trigger an extra fetch.
+mixin _PendingTileTracker {
+  final pending = ValueNotifier<int>(0);
+
+  ImageProvider trackLoad(ImageProvider provider) {
+    pending.value++;
+    var done = false;
+    final stream = provider.resolve(ImageConfiguration.empty);
+    late ImageStreamListener listener;
+    void finish() {
+      if (done) return;
+      done = true;
+      pending.value--;
+      stream.removeListener(listener);
+    }
+
+    listener = ImageStreamListener((image, sync) => finish(),
+        onError: (e, s) => finish());
+    stream.addListener(listener);
+    return provider;
+  }
+}
+
 /// NOAA/NWS nowCOAST MRMS base reflectivity — a dynamic ArcGIS ImageServer,
 /// not a cached XYZ tile pyramid, so each tile is fetched via an
 /// `exportImage` call for that tile's Web Mercator bbox. Free, no key,
@@ -27,7 +56,7 @@ enum WxLayer { radar, clouds, temperature, wind, usRadar }
 /// {'t': ...})` can drive the animation via flutter_map's own tile-reload
 /// hook (it reloads on `additionalOptions` changes) without ever recreating
 /// the provider or its client.
-class MrmsTileProvider extends NetworkTileProvider {
+class MrmsTileProvider extends NetworkTileProvider with _PendingTileTracker {
   // This free ArcGIS export endpoint isn't built for tile-pyramid traffic and
   // rate-limits bursts of concurrent requests (a whole viewport's worth of
   // tiles refetch on every animation frame) — a transient 403 shouldn't crash
@@ -36,6 +65,10 @@ class MrmsTileProvider extends NetworkTileProvider {
   MrmsTileProvider() : super(silenceExceptions: true);
 
   static const _origin = 20037508.342789244;
+
+  @override
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) =>
+      trackLoad(super.getImage(coordinates, options));
 
   @override
   String getTileUrl(TileCoordinates coordinates, TileLayer options) {
@@ -62,10 +95,15 @@ class MrmsTileProvider extends NetworkTileProvider {
 /// satellite feed is currently returning zero frames (dead), so this is a
 /// real image instead of nothing. Same "single stable instance,
 /// additionalOptions-driven reload" rules as [MrmsTileProvider] apply.
-class NoaaSatelliteTileProvider extends NetworkTileProvider {
+class NoaaSatelliteTileProvider extends NetworkTileProvider
+    with _PendingTileTracker {
   NoaaSatelliteTileProvider() : super(silenceExceptions: true);
 
   static const _origin = 20037508.342789244;
+
+  @override
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) =>
+      trackLoad(super.getImage(coordinates, options));
 
   @override
   String getTileUrl(TileCoordinates coordinates, TileLayer options) {
@@ -115,6 +153,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _playing = true;
   Timer? _timer;
   int _tick = 0;
+  int _stall = 0; // consecutive ticks skipped waiting for tiles to finish
 
   @override
   void initState() {
@@ -131,7 +170,23 @@ class _MapScreenState extends State<MapScreen> {
       // every 3rd tick (~1.8s) instead of every tick (~0.6s) like the
       // lightweight RainViewer radar CDN.
       final throttled = _layer == WxLayer.usRadar || _layer == WxLayer.clouds;
-      if (throttled && (_tick++) % 3 != 0) return;
+      if (throttled) {
+        if ((_tick++) % 3 != 0) return;
+        // Queue: don't switch to the next frame until this one's tiles have
+        // actually finished loading, so the viewport doesn't show a
+        // patchwork of old/new tiles mid-transition. Panning/zooming is
+        // untouched by this — that's flutter_map's own tile-fetch path, not
+        // gated by the animation timer at all. Safety valve so a stuck/dead
+        // request can't freeze the animation forever.
+        final pending = _layer == WxLayer.usRadar
+            ? _mrmsTileProvider.pending
+            : _satTileProvider.pending;
+        if (pending.value > 0 && _stall < 4) {
+          _stall++;
+          return;
+        }
+        _stall = 0;
+      }
       setState(() => _frame = (_frame + 1) % frames.length);
     });
   }
