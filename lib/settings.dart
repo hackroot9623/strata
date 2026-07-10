@@ -54,6 +54,7 @@ class AppSettings extends ChangeNotifier {
   int providerIndex = 0; // index into providers[]
   String openMeteoModel = 'best_match'; // Open-Meteo 'models' param
   String pirateWeatherKey = ''; // api.pirateweather.net key (free tier)
+  String forecaKey = ''; // pfa.foreca.com non-expiring access_token
   List<SavedPlace> savedPlaces = [];
   String lastPlace = 'Berlin';
   double? lastLat;
@@ -76,6 +77,7 @@ class AppSettings extends ChangeNotifier {
     providerIndex = p.getInt('providerIndex') ?? 0;
     openMeteoModel = p.getString('openMeteoModel') ?? 'best_match';
     pirateWeatherKey = p.getString('pirateWeatherKey') ?? '';
+    forecaKey = p.getString('forecaKey') ?? '';
     savedPlaces = (p.getStringList('savedPlaces') ?? [])
         .map(SavedPlace.decode)
         .whereType<SavedPlace>()
@@ -101,6 +103,7 @@ class AppSettings extends ChangeNotifier {
     p.setInt('providerIndex', providerIndex);
     p.setString('openMeteoModel', openMeteoModel);
     p.setString('pirateWeatherKey', pirateWeatherKey);
+    p.setString('forecaKey', forecaKey);
     p.setStringList('savedPlaces', savedPlaces.map((e) => e.encode()).toList());
     p.setString('lastPlace', lastPlace);
     if (lastLat != null) p.setDouble('lastLat', lastLat!);
@@ -120,6 +123,7 @@ class AppSettings extends ChangeNotifier {
     int? provider,
     String? openMeteoModel,
     String? pirateWeatherKey,
+    String? forecaKey,
     String? place,
     double? lat,
     double? lon,
@@ -136,6 +140,7 @@ class AppSettings extends ChangeNotifier {
     if (provider != null) providerIndex = provider;
     if (openMeteoModel != null) this.openMeteoModel = openMeteoModel;
     if (pirateWeatherKey != null) this.pirateWeatherKey = pirateWeatherKey;
+    if (forecaKey != null) this.forecaKey = forecaKey;
     if (place != null) lastPlace = place;
     if (lat != null) lastLat = lat;
     if (lon != null) lastLon = lon;

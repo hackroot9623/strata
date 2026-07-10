@@ -99,6 +99,28 @@ class SettingsScreen extends StatelessWidget {
                                 .onSurface
                                 .withValues(alpha: 0.55))),
                   ],
+                  if (settings.providerIndex == 3) ...[
+                    const Divider(height: 24),
+                    _ApiKeyField(
+                      initialValue: settings.forecaKey,
+                      labelText: 'Foreca access token',
+                      onSaved: (v) {
+                        settings.update(forecaKey: v);
+                        onChanged();
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                        'Requires a Foreca developer account. Generate a '
+                        'non-expiring token (My API → Keys, POST /authorize/key) '
+                        'and paste it here. developer.foreca.com',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.55))),
+                  ],
                   Text(
                       'MET Norway omits UV, visibility and rain probability — '
                       'those show as 0/—.',
@@ -262,7 +284,9 @@ class SettingsScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _Header('About'),
-                  Text('Data: Open-Meteo, MET Norway · Radar: RainViewer'),
+                  Text(
+                      'Data: Open-Meteo, MET Norway, Pirate Weather, Foreca · '
+                      'Radar: RainViewer'),
                   Text('Icons: Meteocons by Bas Milius (MIT)'),
                   Text('Fonts: Plus Jakarta Sans, Inter'),
                   SizedBox(height: 4),

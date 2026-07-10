@@ -16,6 +16,7 @@ final List<WeatherProvider> providers = [
   OpenMeteoProvider(),
   MetNoProvider(),
   PirateWeatherProvider(),
+  ForecaProvider(),
 ];
 
 /// Curated subset of Open-Meteo's `models` param — the full list has 20+
@@ -556,6 +557,153 @@ class PirateWeatherProvider implements WeatherProvider {
       precipUnit: settings.precipLabel,
     );
   }
+}
+
+// ── Foreca (pfa.foreca.com) ─────────────────────────────────────────────────
+
+class ForecaProvider implements WeatherProvider {
+  @override
+  String get name => 'Foreca';
+
+  String get _windUnit => switch (settings.windUnit) {
+        WindUnit.kmh => 'KMH',
+        WindUnit.mph => 'MPH',
+        WindUnit.ms => 'MS',
+        WindUnit.kn => 'KTS',
+      };
+  String get _tempUnit => settings.tempUnit == TempUnit.celsius ? 'C' : 'F';
+
+  @override
+  Future<Weather> fetch(Geo geo) async {
+    final key = settings.forecaKey.trim();
+    if (key.isEmpty) throw Exception('Add a Foreca access token in Settings');
+    final headers = {'Authorization': 'Bearer $key'};
+    final loc = '${geo.lon},${geo.lat}';
+    final common = {
+      'tempunit': _tempUnit,
+      'windunit': _windUnit,
+      'rounding': '0',
+      'dataset': 'full',
+    };
+
+    Future<Map<String, dynamic>> get(String path,
+        [Map<String, String> extra = const {}]) async {
+      final uri = Uri.https('pfa.foreca.com', path, {...common, ...extra});
+      final res = await http.get(uri, headers: headers);
+      if (res.statusCode != 200) {
+        throw Exception('Foreca error ${res.statusCode}');
+      }
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+
+    final results = await Future.wait([
+      get('/api/v1/current/$loc'),
+      get('/api/v1/forecast/hourly/$loc', {'periods': '24'}),
+      get('/api/v1/forecast/daily/$loc', {'periods': '7'}),
+    ]);
+    final cur = results[0]['current'] as Map<String, dynamic>;
+    final hourlyData =
+        (results[1]['forecast'] as List).cast<Map<String, dynamic>>();
+    final dailyData =
+        (results[2]['forecast'] as List).cast<Map<String, dynamic>>();
+
+    double? d(Map m, String k) => (m[k] as num?)?.toDouble();
+
+    final hourly = <HourlyPoint>[];
+    for (final e in hourlyData) {
+      final temp = (e['temperature'] as num).toDouble();
+      hourly.add(HourlyPoint(
+        DateTime.parse(e['time'] as String),
+        temp,
+        d(e, 'feelsLikeTemp') ?? temp,
+        (e['precipProb'] as num?)?.toInt(),
+        (e['windSpeed'] as num).toDouble(),
+        _condFromForecaSymbol(e['symbolPhrase'] as String? ?? ''),
+      ));
+      if (hourly.length >= 24) break;
+    }
+
+    DateTime? epoch(Map m, String k) {
+      final v = m[k] as num?;
+      return v == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(v.toInt() * 1000);
+    }
+
+    final daily = <DailyForecast>[];
+    for (final e in dailyData) {
+      daily.add(DailyForecast(
+        date: DateTime.parse(e['date'] as String),
+        max: (e['maxTemp'] as num).toDouble(),
+        min: (e['minTemp'] as num).toDouble(),
+        condition: _condFromForecaSymbol(e['symbolPhrase'] as String? ?? ''),
+        precipProbMax: (e['precipProb'] as num?)?.toInt(),
+        precipSum: _mmToPrecip(d(e, 'precipAccum') ?? 0),
+        uvMax: d(e, 'uvIndex'),
+        windMax: (e['maxWindSpeed'] as num?)?.toDouble() ?? 0,
+        sunrise: epoch(e, 'sunriseEpoch'),
+        sunset: epoch(e, 'sunsetEpoch'),
+      ));
+      if (daily.length >= 7) break;
+    }
+
+    final air = await airQuality(geo.lat, geo.lon);
+    final phrase = cur['symbolPhrase'] as String? ?? '';
+    final symbol = cur['symbol'] as String? ?? 'd000';
+    final curTemp = (cur['temperature'] as num).toDouble();
+
+    return Weather(
+      place: geo.label,
+      lat: geo.lat,
+      lon: geo.lon,
+      provider: name,
+      temp: curTemp,
+      feelsLike: d(cur, 'feelsLikeTemp') ?? curTemp,
+      humidity: (cur['relHumidity'] as num?)?.round() ?? 0,
+      wind: (cur['windSpeed'] as num).toDouble(),
+      windGust: (cur['windGust'] as num?)?.toDouble() ?? 0,
+      windDir: (cur['windDir'] as num?)?.round() ?? 0,
+      pressure: (cur['pressure'] as num?)?.toDouble() ?? 0,
+      precip: _mmToPrecip((cur['precipRate'] as num?)?.toDouble() ?? 0),
+      cloudCover: (cur['cloudiness'] as num?)?.round() ?? 0,
+      uvIndex: d(cur, 'uvIndex'),
+      visibilityKm: (cur['visibility'] as num?) == null
+          ? null
+          : (cur['visibility'] as num).toDouble() / 1000,
+      dewPoint: d(cur, 'dewPoint'),
+      air: air,
+      // Foreca's minutely nowcast is a separate endpoint — not wired up yet.
+      nowcast: null,
+      condition: _condFromForecaSymbol(phrase),
+      description: phrase.isEmpty
+          ? 'Unknown'
+          : '${phrase[0].toUpperCase()}${phrase.substring(1)}',
+      isDay: symbol.startsWith('d'),
+      sunrise: daily.isNotEmpty ? daily.first.sunrise : null,
+      sunset: daily.isNotEmpty ? daily.first.sunset : null,
+      hourly: hourly,
+      daily: daily,
+      tempUnit: settings.tempUnitLabel,
+      windUnit: settings.windUnit.label,
+      precipUnit: settings.precipLabel,
+    );
+  }
+}
+
+Condition _condFromForecaSymbol(String phrase) {
+  final s = phrase.toLowerCase();
+  if (s.contains('thunder')) return Condition.thunder;
+  if (s.contains('snow') || s.contains('sleet') || s.contains('ice')) {
+    return Condition.snow;
+  }
+  if (s.contains('rain') || s.contains('drizzle') || s.contains('shower')) {
+    return Condition.rain;
+  }
+  if (s.contains('fog') || s.contains('mist') || s.contains('haze')) {
+    return Condition.fog;
+  }
+  if (s.contains('clear') || s.contains('sunny')) return Condition.clear;
+  return Condition.cloudy;
 }
 
 Condition _condFromPirateIcon(String icon) {
